@@ -7,7 +7,7 @@ import tempfile
 
 from PIL import Image
 
-from .effects import EffectPainter
+from .effects import EffectPainter, receive_light
 from .paint import Canvas
 from .timeline import PLANES
 
@@ -31,7 +31,8 @@ def paste_with_border(atlas, frame, x, y):
         atlas.putpixel((x + width + 1, dest_y), frame.getpixel((width - 1, row)))
 
 
-def export_tracks(timeline, layers, size, seed, accent, anchor, directory, animate, gif):
+def export_tracks(timeline, art, size, seed, accent, anchor, directory, animate, gif):
+    layers = art.layers
     width, height = size
     ratio = min(1, 560 / max(size), sqrt(108_000 / (width * height)))
     frame_size = fw, fh = max(1, round(width * ratio)), max(1, round(height * ratio))
@@ -39,7 +40,8 @@ def export_tracks(timeline, layers, size, seed, accent, anchor, directory, anima
     atlas_size = (fw + 2) * columns, (fh + 2) * ceil(timeline.frames / columns)
     if max(atlas_size) > 8192:
         raise ValueError("effect frame geometry exceeds the filmstrip dimensions")
-    painter = EffectPainter(Canvas(*frame_size, seed ^ 0xA7F0, accent, anchor))
+    painter = EffectPainter(Canvas(*frame_size, seed ^ 0xA7F0, accent, anchor), art.lake)
+    ordered = [(name, timeline.tracks[name]) for name in PLANES if name in timeline.tracks]
     bases = {name: layers[name].resize(frame_size, Image.Resampling.LANCZOS)
              for name, track in timeline.tracks.items() if track.base and name in layers}
     atlases = {name: Image.new("RGBA", atlas_size) for name in timeline.tracks} if animate else {}
@@ -51,8 +53,12 @@ def export_tracks(timeline, layers, size, seed, accent, anchor, directory, anima
                       if name not in timeline.tracks}
 
     for index in range(timeline.frames if animate or gif else 1):
-        for name, track in timeline.tracks.items():
+        lit_frames = {}
+        for name, track in ordered:
             frame = painter.frame(track.effects, bases.get(name), index / timeline.frames)
+            if track.light is not None:
+                frame = receive_light(frame, lit_frames[track.light])
+            lit_frames[name] = frame
             if index == 0:
                 layers[name] = frame.resize(size, Image.Resampling.BICUBIC)
             if animate:
@@ -67,6 +73,9 @@ def export_tracks(timeline, layers, size, seed, accent, anchor, directory, anima
         # The transparent frames retain full alpha precision throughout playback.
         atlas.save(directory / f"{name}.loop.png", compress_level=3)
     tracks = {name: {"width": fw, "height": fh, "columns": columns} for name in atlases}
+    for name, track in ordered:
+        if name in tracks and track.parallax != name:
+            tracks[name]["parallax"] = track.parallax
     return tracks, preview_frames
 
 

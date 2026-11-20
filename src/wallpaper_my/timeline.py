@@ -6,7 +6,7 @@ from math import floor
 import re
 
 PLANES = ("background", "atmosphere", "middle", "surface", "foreground", "particles")
-EFFECTS = ("aurora", "haze", "caustics", "ripples", "particles", "wave", "bloom")
+EFFECTS = ("aurora", "haze", "caustics", "ripples", "particles", "wave", "bloom", "reflection")
 
 
 def in_range(value, low, high):
@@ -95,6 +95,8 @@ class Effect:
 class Track:
     base: bool
     effects: tuple[Effect, ...]
+    parallax: str
+    light: str | None
 
 
 @dataclass(frozen=True)
@@ -122,11 +124,25 @@ class Timeline:
         for name, track in tracks.items():
             if name not in PLANES[1:]:
                 raise ValueError(f"unknown overlay {name!r}")
-            fields(track, ("base", "effects"), f"{name} track")
+            fields(track, ("base", "effects", "parallax", "light"), f"{name} track")
             base, effects = track.get("base", False), track.get("effects")
             if type(base) is not bool or not isinstance(effects, list) or not 1 <= len(effects) <= 8:
                 raise ValueError(f"{name} must have a boolean base and one to eight effects")
-            parsed[name] = Track(base, tuple(Effect.read(effect) for effect in effects))
+            parallax = track.get("parallax", name)
+            if parallax not in PLANES:
+                raise ValueError(f"{name} has an unknown parallax anchor")
+            light = track.get("light")
+            if light is not None and (not isinstance(light, str) or light not in PLANES[:PLANES.index(name)]
+                                      or light not in tracks):
+                raise ValueError(f"{name} light must name an earlier animated plane")
+            effects = tuple(Effect.read(effect) for effect in effects)
+            if any(effect.name == "reflection" for effect in effects):
+                if preset != "aurora-fjord" or name != "surface" or parallax not in ("middle", "surface"):
+                    raise ValueError("reflection needs Aurora Fjord's surface track aligned with the lake")
+            parsed[name] = Track(base, effects, parallax, light)
+        for name, track in parsed.items():
+            if track.light is not None and parsed[track.light].parallax != track.parallax:
+                raise ValueError(f"{name} and {track.light} need the same parallax anchor")
         return preset, cls(duration, frames, parsed)
 
 
@@ -136,13 +152,13 @@ def pulse(low, high, peak=.5):
 
 RECIPES = {
     "aurora-fjord": {
-        "preset": "aurora-fjord", "duration": 7.5, "fps": 16,
+        "preset": "aurora-fjord", "duration": 9, "fps": 15,
         "tracks": {
-            "atmosphere": {"effects": [
-                {"type": "aurora", "strength": pulse(.72, 1, .42)},
-                {"type": "bloom", "strength": pulse(.22, .48, .49), "scale": .9},
+            "surface": {"effects": [
+                {"type": "aurora", "strength": pulse(.79, .96, .48)},
+                {"type": "bloom", "strength": .23, "scale": .85},
+                {"type": "reflection", "strength": .77, "scale": .86},
             ]},
-            "surface": {"effects": [{"type": "ripples", "strength": pulse(.53, .85, .46)}]},
         },
     },
     "amber-dunes": {
@@ -154,13 +170,15 @@ RECIPES = {
         ]}},
     },
     "tidal-garden": {
-        "preset": "tidal-garden", "duration": 8, "fps": 15,
+        "preset": "tidal-garden", "duration": 9.5, "fps": 15,
         "tracks": {
-            "atmosphere": {"effects": [
-                {"type": "caustics", "strength": pulse(.65, .96, .41)},
-                {"type": "bloom", "strength": .3, "scale": 1.2},
+            "atmosphere": {"parallax": "surface", "effects": [
+                {"type": "caustics", "strength": pulse(.63, .80, .48)},
+                {"type": "particles", "strength": .56, "scale": .92},
             ]},
-            "particles": {"effects": [{"type": "particles", "strength": .9}]},
+            "surface": {"base": True, "light": "atmosphere", "effects": [
+                {"type": "wave", "strength": .94, "scale": .92},
+            ]},
         },
     },
 }

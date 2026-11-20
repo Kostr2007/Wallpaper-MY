@@ -1,15 +1,29 @@
-"""Paint three panoramas with independent atmospheric and terrain planes."""
+"""Paint the panoramic scenery and the surfaces that receive light."""
 
+from dataclasses import dataclass
 from math import cos, pi, sin
 
 import numpy as np
-from PIL import ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from .paint import bell
 
 
+@dataclass(frozen=True)
+class Lake:
+    horizon: float
+    water: Image.Image
+    mountains: Image.Image
+
+
+@dataclass(frozen=True)
+class SceneArt:
+    layers: dict[str, Image.Image]
+    lake: Lake | None = None
+
+
 def aurora(c):
-    x, y, u = c.x, c.y, c.u
+    x, y = c.x, c.y
     w, h = c.size
     mist = c.noise(18, 10)
     glow = bell(x + .23, .75) * bell(y - .49, .36)
@@ -28,25 +42,13 @@ def aurora(c):
                      fill=(*c.color("#d2def7"), int(c.rng.integers(28, 165))))
     sky.alpha_composite(stars)
 
-    lights = c.transparent()
-    folds = c.noise(96, 8)
-    for index, (height, base, fringe) in enumerate([
-        (.29, "#9fffd2", "#87b8ff"), (.39, "#a9f0db", "#c9a0f4"), (.46, "#7de8da", "#8ba7ff"),
-    ]):
-        curve = height + .088 * np.sin(5 * x + index * .8) + .037 * np.sin(11 * x - index)
-        curve += .062 * x
-        delta = y - curve
-        beam = .54 + .25 * np.sin(x * 49 + 3 * folds) + .15 * np.sin(x * 122 + 4 * folds)
-        ends = bell(u - (.44 + index * .08), .44)
-        c.wash(lights, fringe, .33 * ends * beam * bell(delta + .075, .069 + .023 * index))
-        c.wash(lights, base, ends * beam * (.60 * bell(delta, .016) + .26 * bell(delta + .03, .047)))
-
-    distance = np.maximum(y - .57, 0)
-    bands = np.sin(43 * np.log1p(35 * distance) + 2 * mist + c.x * 7)
-    shimmer = bell(x + .05 - .12 * mist, .19 + distance) * (.15 + .11 * bands)
-    water_tone = .24 + .40 * (1 - distance) + .09 * mist + shimmer + c.grain() * .013
-    lake = c.tones(water_tone, (0, "#111d3c"), (.48, "#26395e"), (.65, "#416f86"), (.9, "#8dcac3"),
-                   alpha=np.clip((y - .574) * h, 0, 1))
+    horizon = .574
+    distance = np.maximum(y - horizon, 0)
+    grain = c.noise(96, 8)
+    water_tone = .62 - .62 * distance + .045 * mist + .012 * grain + c.grain() * .012
+    lake = c.tones(water_tone, (0, "#10172e"), (.52, "#23334d"), (.84, "#455d74"),
+                   alpha=np.clip((y - horizon) * h, 0, 1))
+    mountains = c.transparent()
     contour = c.noise(29, 23)
     rock_detail = c.noise(130, 87)
     for index, (base, lift, dark, bright) in enumerate([
@@ -63,7 +65,10 @@ def aurora(c):
         fade = np.clip((.61 + .012 * index - y) * 100, 0, 1)
         mountain = c.tones(value, (0, dark), (.98, bright),
                            alpha=np.clip(below * h, 0, 1) * fade)
-        lake.alpha_composite(mountain)
+        mountains.alpha_composite(mountain)
+    mountain_alpha = mountains.getchannel("A")
+    water = ImageChops.multiply(lake.getchannel("A"), ImageChops.invert(mountain_alpha))
+    lake.alpha_composite(mountains)
 
     shore = .975 - .14 * bell(x + .98, .49) - .25 * bell(x - .95, .53) + c.ridge(17, .027)
     land = c.tones(.43 + .17 * mist + .12 * contour - .29 * y + .013 * c.grain(),
@@ -84,7 +89,8 @@ def aurora(c):
             trees.polygon([(pos, py - length * .10), (pos - span, py + length * .065),
                            (pos - span * .27, py + length * .044), (pos, py + length * .094),
                            (pos + span * .9, py + length * .085)], fill=(*c.color(color), 255))
-    return {"background": sky, "atmosphere": lights, "middle": lake, "foreground": land}
+    return SceneArt({"background": sky, "middle": lake, "foreground": land},
+                    Lake(horizon, water, mountain_alpha))
 
 
 def dunes(c):
@@ -125,7 +131,7 @@ def dunes(c):
         layer = c.tones(value, (0, shadow), (.47, warm), (1.03, bright),
                         alpha=np.clip(delta * c.height, 0, 1))
         (middle if index < 3 else foreground).alpha_composite(layer)
-    return {"background": sky, "atmosphere": clouds, "middle": middle, "foreground": foreground}
+    return SceneArt({"background": sky, "atmosphere": clouds, "middle": middle, "foreground": foreground})
 
 
 def garden(c):
@@ -136,14 +142,6 @@ def garden(c):
     glow = bell(x + .15, .56) * bell(y - .08, .51)
     sea = c.tones(.86 * (1 - y) + .24 * glow + .043 * swell + .014 * c.grain(),
                   (0, "#171c43"), (.34, "#1b3359"), (.71, "#3e7b8f"), (1.12, "#ade7db"))
-    rays = c.transparent()
-    ray_x = (x + .34 * y) / (.37 + y)
-    beams = np.square(np.maximum(np.sin(ray_x * 20 + .72 * swell), 0))
-    c.wash(rays, "#b8ffea", .29 * beams * glow * (1 - y))
-    phase = x * 39 + 7 * y + 2.5 * swell
-    interference = np.sin(phase) + np.sin(1.3 * phase + .85 * fine - 13 * y)
-    c.wash(rays, "#a1ebec", .23 * bell(y - .12, .22) * bell(interference, .19) * (.71 + .29 * fine))
-
     reef = c.transparent()
     for index, (level, dark, bright) in enumerate([
         (.75, "#23345b", "#4c6c89"), (.85, "#26284f", "#565781"), (.99, "#1b1e42", "#3c466c"),
@@ -155,11 +153,12 @@ def garden(c):
 
     plants = c.transparent()
     draw = ImageDraw.Draw(plants)
-    for position in np.linspace(.01, .99, max(15, round(w / h * 14))):
+    for index, position in enumerate(np.linspace(.01, .99, max(15, round(w / h * 14)))):
         px = position * w
         outer = np.clip(2.8 * abs(position - .5), .13, 1)
         base = h * c.rng.uniform(.91, 1.08)
-        length = c.rng.uniform(.12, .56) * outer * h
+        groves = bell(position - .23, .083) + bell(position - .79, .085)
+        length = (c.rng.uniform(.12, .54) * outer + .27 * groves) * h
         sway = c.rng.uniform(-.10, .10) * h * outer
         amplitude = c.rng.uniform(.012, .046) * h
         bend = c.rng.uniform(0, 2 * pi)
@@ -171,12 +170,27 @@ def garden(c):
             spine.append((center, py))
             left.append((center - width, py))
             right.append((center + width, py))
-        color = ("#252e57", "#293a63", "#32526d", "#384470")[int(c.rng.integers(0, 4))]
+        color = ("#263958", "#2c4561", "#355e71", "#394d6e")[int(c.rng.integers(0, 4))]
+        if length > .20 * h:
+            for i in range(19, 60, 5):
+                pos_x, pos_y = spine[i]
+                taper = .64 + .36 * sin(pi * i / 64)
+                side = -1 if (i + index) % 2 else 1
+                span = length * taper * (.15 + .045 * sin(i + bend))
+                dx, dy = side * span, -span * (.63 + .35 * i / 64)
+                tips = [(pos_x, pos_y), (pos_x + dx * .40, pos_y + dy * .62),
+                        (pos_x + dx * .79, pos_y + dy * .89), (pos_x + dx, pos_y + dy),
+                        (pos_x + dx * .64, pos_y + dy * .36), (pos_x + dx * .29, pos_y + dy * .21)]
+                draw.polygon(tips, fill=(*c.color(color), 255))
+                c.stroke(draw, [tips[0], (pos_x + .53 * dx, pos_y + .52 * dy), tips[3]],
+                         "#527e86", opacity=182)
         draw.polygon(left + right[::-1], fill=(*c.color(color), 255))
-        c.stroke(draw, spine[2:-5], "#6798a0", opacity=150)
+        c.stroke(draw, spine[2:-5], "#668e96", opacity=171)
         for i in range(7, 58, 4):
             c.stroke(draw, [left[i], spine[i - 4], right[i]], "#58718e", opacity=120)
 
+    corals = c.transparent()
+    draw = ImageDraw.Draw(corals)
     for center, base in [(.15, .97), (.28, 1.03), (.71, 1.04), (.86, .98), (.96, .94)]:
         px, py = center * w, base * h
         count = int(c.rng.integers(9, 15))
@@ -195,13 +209,4 @@ def garden(c):
                     draw.ellipse((tip[0] - r, tip[1] - r, tip[0] + r, tip[1] + r),
                                  fill=(*c.color("#e4accd"), 230))
 
-    particles = c.transparent()
-    dots = ImageDraw.Draw(particles)
-    for _ in range(round(130 * w / h)):
-        px, py = c.rng.uniform(0, w), c.rng.uniform(.13 * h, h)
-        r = max(.6, c.rng.uniform(.0006, .0038) * h)
-        bright = int(c.rng.integers(48, 180))
-        dots.ellipse((px - r * 2.1, py - r * 2.1, px + r * 2.1, py + r * 2.1),
-                     fill=(*c.color("#80e0da"), bright // 5))
-        dots.ellipse((px - r, py - r, px + r, py + r), fill=(*c.color("#c9f6f1"), bright))
-    return {"background": sea, "atmosphere": rays, "middle": reef, "foreground": plants, "particles": particles}
+    return SceneArt({"background": sea, "middle": reef, "surface": plants, "foreground": corals})

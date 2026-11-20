@@ -8,17 +8,15 @@ import re
 import tempfile
 from typing import Callable
 
-from PIL import Image
-
 from .export import compose, export_tracks, save_gif
 from .paint import Canvas
-from .scenes import aurora, dunes, garden
+from .scenes import SceneArt, aurora, dunes, garden
 from .timeline import EFFECTS, RECIPES, Timeline
 
 
 @dataclass(frozen=True)
 class Scene:
-    paint: Callable[[Canvas], dict[str, Image.Image]]
+    paint: Callable[[Canvas], SceneArt]
     accent: str
     seed: int
 
@@ -34,12 +32,13 @@ def render(name, timeline, output, size, seed, accent, animate, gif):
     scene = SCENES[name]
     seed = scene.seed if seed is None else seed
     directory = output / name
-    layers = scene.paint(Canvas(*size, seed, accent, scene.accent))
+    art = scene.paint(Canvas(*size, seed, accent, scene.accent))
+    layers = art.layers
     with tempfile.TemporaryDirectory(dir=output, prefix=".wallpaper-my-") as temporary:
         staging = Path(temporary) / name
         companions = staging / f"{name}.parallax"
         companions.mkdir(parents=True)
-        tracks, frames = export_tracks(timeline, layers, size, seed, accent, scene.accent, companions, animate, gif)
+        tracks, frames = export_tracks(timeline, art, size, seed, accent, scene.accent, companions, animate, gif)
         for plane, image in layers.items():
             if plane == "background":
                 image = image.convert("RGB")

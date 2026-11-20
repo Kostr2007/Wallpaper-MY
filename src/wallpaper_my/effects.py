@@ -3,28 +3,69 @@
 from math import cos, pi, sin, tau
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageFilter
 
-from .paint import bell
+from .paint import bell, u8
+from .scenes import Lake
 
 
 def aurora(c, layer, angle, power, scale, color, secondary, noise, _particles):
     x, y, u = c.x, c.y, c.u
-    for i, altitude in enumerate((.25, .37, .46)):
-        local = angle + 1.9 * i
+    for i, altitude in enumerate((.30, .414)):
+        local = angle + 1.7 * i
         wavelength = x * scale
-        folds = np.sin(4.7 * wavelength + .83 * np.sin(5 * wavelength + local) + i)
-        curl = np.sin(8.4 * wavelength - .93 * np.cos(local) - .7 * i)
-        path = altitude + .075 * folds + .043 * curl + .056 * x
+        folds = np.sin(3.8 * wavelength + .53 * np.sin(2.6 * wavelength + local) + i)
+        curl = np.sin(7.3 * wavelength - .43 * np.cos(local) - .7 * i)
+        path = altitude + .074 * folds + .030 * curl + .050 * x
         delta = y - path
-        ends = bell(u - .5 - .11 * np.sin(local), .39)
-        width = .047 + .023 * np.cos(4.3 * wavelength + local)
-        curtains = .57 + .26 * np.sin(74 * wavelength + 7 * noise + np.sin(12 * x + local) * 3.2)
-        curtains += .16 * np.sin(135 * wavelength + 9 * noise - 2 * local)
-        veil = ends * curtains * bell(delta + width, width * 1.3)
-        spine = ends * curtains * bell(delta, .011 + .005 * i)
-        c.wash(layer, secondary or ("#afa4f4" if i == 1 else "#85a9f6"), power * veil * .48)
-        c.wash(layer, color or ("#a5f6cc" if i == 0 else "#78e4d3"), power * (.70 * spine + .30 * veil))
+        ends = bell(u - .46 - .053 * np.sin(local), .36)
+        width = .058 + .019 * np.cos(4.3 * wavelength + local)
+        curtains = .68 + .20 * np.sin(43 * wavelength + 3 * noise + .9 * np.sin(8 * x + local))
+        curtains += .10 * np.sin(91 * wavelength + 5 * noise - local)
+        veil = ends * curtains * bell(delta + width, width * 1.25)
+        spine = ends * curtains * bell(delta, .012 + .006 * i)
+        c.wash(layer, secondary or ("#8f91cb" if i == 0 else "#77bcb7"), power * veil * (.40 - .12 * i))
+        c.wash(layer, color or ("#a3e6bc" if i == 0 else "#68cbbb"),
+               power * ((.71 - .23 * i) * spine + .28 * veil))
+
+
+def reflect(c, layer, angle, power, scale, lake):
+    """Project the emitted light onto the lake and let the terrain occlude it."""
+    water, mountains = lake.water, lake.mountains
+    blocked_sky = ImageChops.lighter(water, mountains)
+    visible = ImageChops.multiply(layer.getchannel("A"), ImageChops.invert(blocked_sky))
+    layer.putalpha(visible)
+    emission = np.asarray(layer.convert("RGBa"), dtype=np.float32)
+
+    distance = np.maximum(c.y - lake.horizon, 0)
+    wave = np.sin(64 * distance * scale + 4 * c.x - angle)
+    wave += .54 * np.sin(103 * distance * scale - 9 * c.x + 2 * angle)
+    x = c.u * (c.width - 1) + wave * (1.3 + 11 * distance) * c.height / 200
+    y = (lake.horizon - distance * (1.31 + .39 * distance)
+         + wave * (.001 + .016 * distance)) * (c.height - 1)
+    x = np.clip(x, 0, c.width - 1)
+    y = np.clip(y, 0, c.height - 1)
+    left, top = x.astype(np.int32), y.astype(np.int32)
+    right, bottom = np.minimum(left + 1, c.width - 1), np.minimum(top + 1, c.height - 1)
+    sx, sy = (x - left)[..., None], (y - top)[..., None]
+    upper = emission[top, left] * (1 - sx) + emission[top, right] * sx
+    lower = emission[bottom, left] * (1 - sx) + emission[bottom, right] * sx
+    reflected = (upper * (1 - sy) + lower * sy)
+    visibility = np.asarray(water, dtype=np.float32) / 255
+    falloff = power * visibility * (.86 - .80 * distance) * (.90 + .064 * wave)
+    reflected *= falloff[..., None]
+    image = Image.frombytes("RGBa", c.size, u8(reflected).tobytes())
+    layer.alpha_composite(image.convert("RGBA"))
+
+    # A short falloff down the silhouette keeps the reflected tint on the ridge.
+    ridge = np.asarray(mountains, dtype=np.float32) / 255
+    thickness = max(1, round(c.height * .018))
+    from_above = np.pad(ridge, ((thickness, 0), (0, 0)))[:-thickness]
+    slope = np.maximum(ridge - from_above, 0)
+    radiance = emission.sum(axis=0, keepdims=True) / c.height
+    strength = (slope * power * 1.05)[..., None]
+    tint = Image.frombytes("RGBa", c.size, u8(radiance * strength).tobytes())
+    layer.alpha_composite(tint.convert("RGBA"))
 
 
 def ripples(c, layer, angle, power, scale, color, secondary, noise, _particles):
@@ -56,41 +97,55 @@ def haze(c, layer, angle, power, scale, color, secondary, noise, _particles):
 
 def caustics(c, layer, angle, power, scale, color, secondary, noise, _particles):
     x, y = c.x, c.y
-    focus = x + .13 + .055 * np.cos(angle + y * 4)
-    spreading = (focus + .31 * y) / (.33 + y)
-    mask = bell(focus, .83) * bell(y - .03, .48)
-    ray = np.maximum(np.sin(spreading * 15 * scale + 1.6 * noise + .53 * np.sin(angle + 4 * x)), 0) ** 3
-    c.wash(layer, color or "#bbffdf", power * ray * mask * .61)
-    phase = x * 33 * scale + y * 12 + 3.2 * noise
-    interference = np.sin(phase + 1.7 * np.sin(angle + x * 4)) + np.sin(1.28 * phase - 17 * y - angle)
-    web = bell(interference, .21) * (.60 + .40 * np.cos(phase * .7 + angle) ** 2)
-    c.wash(layer, secondary or "#9beedc", power * .29 * web * mask * bell(y - .10, .19))
+    focus = x + .19 + .046 * np.sin(angle + y * 4)
+    spreading = (focus + .28 * y) / (.36 + y)
+    mask = bell(focus, .98) * np.exp(-y * 1.38)
+    ray = (.50 + .50 * np.cos(spreading * 12 * scale + .68 * noise
+                              + .62 * np.sin(angle + 3.1 * x))) ** 4
+    c.wash(layer, color or "#95cfbd", power * ray * mask * .43)
+    phase = x * 32 * scale + y * 16 + 2.9 * noise
+    interference = np.sin(phase + .67 * np.sin(angle + x * 4)) + np.sin(1.29 * phase - 17 * y - angle)
+    web = bell(interference, .32) * (.70 + .30 * np.cos(phase * .7 + angle) ** 2)
+    c.wash(layer, secondary or "#79c0b3", power * .24 * web * mask * bell(y - .05, .16))
+
+
+def current_phase(x, y, angle, scale):
+    return (3.8 * x + 3.1 * y) * scale + angle
 
 
 def motes(c, layer, angle, power, scale, color, secondary, _noise, particles):
-    glow, points = c.transparent(), c.transparent()
-    halo, brush = ImageDraw.Draw(glow), ImageDraw.Draw(points)
-    bright = c.color(color or "#c6fcf5")
-    soft = c.color(secondary or "#76dfd7")
-    for x, y, phase, drift, size, speed in particles:
-        px = c.width * (x + (.008 + .035 * drift) * sin(angle + phase))
-        py = c.height * (y - (.018 + .052 * drift) * cos(angle + phase * .63))
-        pulse = (.35 + .65 * (.5 + .5 * sin(angle * speed + phase)) ** 2) * power
-        radius = max(.6, size * c.height * scale)
-        halo_radius = radius * 2.55
-        halo.ellipse((px - halo_radius, py - halo_radius, px + halo_radius, py + halo_radius),
-                     fill=(*soft, round(72 * pulse)))
-        brush.ellipse((px - radius, py - radius, px + radius, py + radius), fill=(*bright, round(245 * pulse)))
-    layer.alpha_composite(glow.filter(ImageFilter.GaussianBlur(max(.7, c.height * .004))))
-    layer.alpha_composite(points)
+    light = layer.getchannel("A")
+    lit = light.getbbox() is not None
+    light = light.filter(ImageFilter.GaussianBlur(max(.6, c.height * .012)))
+    alphas = np.zeros((2, c.height, c.width), dtype=np.float32)
+    for i, (x, y, phase, drift, size) in enumerate(particles):
+        horizontal = (x - .5) * c.width / c.height
+        flow = current_phase(horizontal, y, angle, scale) + .22 * sin(phase)
+        px = c.width * (x + (.012 + .023 * drift) * sin(flow) + .006 * sin(phase + angle))
+        py = c.height * (y + (.012 + .016 * drift) * cos(flow + phase * .34))
+        if not (0 <= px < c.width and 0 <= py < c.height):
+            continue
+        illumination = min(1, light.getpixel((int(px), int(py))) / 66) if lit else .72
+        opacity = power * (.018 + .27 * illumination) * (1 - .65 * y)
+        # Fractional positions keep the small particles from blinking as they cross pixels.
+        sigma = max(.38, size * c.height * scale)
+        radius = max(1, round(3 * sigma))
+        ix, iy = int(px), int(py)
+        left, right = max(0, ix - radius), min(c.width, ix + radius + 1)
+        top, bottom = max(0, iy - radius), min(c.height, iy + radius + 1)
+        xx = np.arange(left, right)[None, :] - px
+        yy = np.arange(top, bottom)[:, None] - py
+        alphas[i % 2, top:bottom, left:right] += opacity * np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+    c.wash(layer, secondary or "#5c9993", alphas[0])
+    c.wash(layer, color or "#81bcab", alphas[1])
 
 
 def wave(c, layer, angle, power, scale, _color, _secondary, noise, _particles):
     # Fix the bottom in place and interpolate in premultiplied alpha to avoid dark fringes.
     row = np.arange(c.height)[:, None]
     x = np.arange(c.width, dtype=np.float32)[None, :]
-    sway = .04 * c.width * power * ((1 - c.y) ** 1.5)
-    shift = sway * np.sin((12 * c.x + 7 * c.y) * scale + .9 * noise + angle)
+    sway = .065 * c.width * power * np.maximum(.86 - c.y, 0) ** 1.45
+    shift = sway * np.sin(current_phase(c.x, c.y, angle, scale) + .47 * noise)
     sample = np.clip(x - shift, 0, c.width - 1)
     left = sample.astype(np.int32)
     weight = (sample - left)[..., None]
@@ -106,17 +161,30 @@ def bloom(c, layer, _angle, power, scale, _color, _secondary, _noise, _particles
     layer.paste(halo)
 
 
+def receive_light(layer, source):
+    soft = source.convert("RGBa").filter(ImageFilter.GaussianBlur(.8)).convert("RGBA")
+    mask = soft.getchannel("A").point([min(76, round(i * 1.35)) for i in range(256)])
+    lit = Image.composite(soft.convert("RGB"), layer.convert("RGB"), mask)
+    lit.putalpha(layer.getchannel("A"))
+    return lit
+
+
 PAINTERS = {"aurora": aurora, "haze": haze, "caustics": caustics, "ripples": ripples,
             "particles": motes, "wave": wave, "bloom": bloom}
 
 
 class EffectPainter:
-    def __init__(self, canvas):
+    def __init__(self, canvas, lake=None):
         self.canvas = canvas
+        if lake is not None:
+            water, mountains = (mask.resize(canvas.size, Image.Resampling.LANCZOS)
+                                for mask in (lake.water, lake.mountains))
+            lake = Lake(lake.horizon, water, mountains)
+        self.lake = lake
         self.noise = canvas.noise(36, 14)
-        count = min(210, max(42, round(61 * canvas.width / canvas.height)))
-        self.particles = [(canvas.rng.random(), canvas.rng.uniform(.115, .95), canvas.rng.uniform(0, tau),
-                           canvas.rng.random(), canvas.rng.uniform(.0012, .0064), int(canvas.rng.integers(1, 4)))
+        count = min(120, max(24, round(34 * canvas.width / canvas.height)))
+        self.particles = [(canvas.rng.random(), canvas.rng.uniform(.18, .91), canvas.rng.uniform(0, tau),
+                           canvas.rng.random(), canvas.rng.uniform(.0013, .0044))
                           for _ in range(count)]
 
     def frame(self, effects, base, time):
@@ -124,7 +192,15 @@ class EffectPainter:
         for index, effect in enumerate(effects):
             power = effect.strength.at(time)
             if power > 0:
-                angle = tau * (time % 1) * effect.cycles + index * pi * .48
-                PAINTERS[effect.name](self.canvas, layer, angle, power, effect.scale.at(time),
-                                      effect.color, effect.secondary, self.noise, self.particles)
+                angle = tau * (time % 1) * effect.cycles
+                if effect.name not in ("particles", "wave"):
+                    angle += index * pi * .48
+                scale = effect.scale.at(time)
+                if effect.name == "reflection":
+                    if self.lake is None:
+                        raise ValueError("reflection requires a scene with a lake")
+                    reflect(self.canvas, layer, angle, power, scale, self.lake)
+                else:
+                    PAINTERS[effect.name](self.canvas, layer, angle, power, scale,
+                                          effect.color, effect.secondary, self.noise, self.particles)
         return layer

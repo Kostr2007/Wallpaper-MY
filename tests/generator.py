@@ -95,3 +95,34 @@ with TemporaryDirectory() as directory:
     recipe_path.write_text(json.dumps(recipe))
     assert subprocess.run([*command, "--recipe", str(recipe_path)], capture_output=True).returncode == 2
     assert subprocess.run([*command, "--output", str(root / "first")], capture_output=True).returncode == 1
+
+    fjord = json.loads(subprocess.check_output(["wallpaper-my", "--write-recipe", "aurora-fjord"]))
+    fjord.update(duration=2, fps=6)
+    fjord["tracks"]["surface"]["effects"][0]["strength"] = {"keys": [[0, 0], [.5, 1], [1, 0]]}
+    recipe_path.write_text(json.dumps(fjord))
+    subprocess.run([*command, "--recipe", str(recipe_path), "--output", str(root / "fjord")], check=True)
+    pack = check(root / "fjord" / "aurora-fjord", (320, 180))
+    manifest = json.loads((pack / "motion.json").read_text())
+    frames = atlas_frames(pack, "surface", manifest["tracks"]["surface"], manifest["frames"])
+    dark, bright = frames[0].getchannel("A"), frames[6].getchannel("A")
+    assert not dark.getbbox(), "light and reflection must disappear together"
+    assert bright.crop((0, 0, 320, 92)).getbbox(), "sky emission"
+    assert bright.crop((0, 117, 320, 177)).getbbox(), "projection on the water"
+    with Image.open(pack / "foreground.png") as foreground:
+        with Image.open(pack.parent / "aurora-fjord.png") as preview:
+            opaque = foreground.getchannel("A").point([0] * 255 + [255])
+            diff = ImageChops.difference(foreground.convert("RGB"), preview)
+            for band in diff.split():
+                assert not ImageChops.multiply(opaque, band).getbbox()
+
+    garden = json.loads(template)
+    garden.update(duration=2, fps=6)
+    garden["tracks"]["surface"]["effects"][0]["strength"] = 0
+    recipe_path.write_text(json.dumps(garden))
+    subprocess.run([*command, "--recipe", str(recipe_path), "--output", str(root / "lit")], check=True)
+    pack = check(root / "lit" / "tidal-garden", (320, 180))
+    manifest = json.loads((pack / "motion.json").read_text())
+    assert manifest["tracks"]["atmosphere"]["parallax"] == "surface"
+    frames = atlas_frames(pack, "surface", manifest["tracks"]["surface"], manifest["frames"])
+    assert frames[0].getchannel("A").tobytes() == frames[6].getchannel("A").tobytes()
+    assert ImageChops.difference(frames[0].convert("RGB"), frames[6].convert("RGB")).getbbox(), "light on still kelp"

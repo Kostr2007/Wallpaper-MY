@@ -6,40 +6,42 @@
 
 ## Коллекция
 
-- **Aurora Fjord** — ленты сияния меняют форму и яркость, а по воде проходит отдельная волна отражения.
+- **Aurora Fjord** — ленты сияния отражаются в тёмной воде и слегка подсвечивают гребни гор.
 - **Amber Dunes** — над песчаными грядами два потока дымки свиваются и рассеиваются.
-- **Tidal Garden** — подводные блики меняют узор, а частицы пульсируют и движутся по отдельным траекториям.
+- **Tidal Garden** — листовые веера сгибаются под течением, а движущиеся лучи подсвечивают их и взвесь в воде.
 
 ![Три панорамы сверху вниз: Aurora Fjord, Amber Dunes и Tidal Garden](docs/gallery.jpg)
+
+[Отдельный GIF Tidal Garden](docs/tidal.gif) · [Замысел и фотореференсы](docs/design.md#свет-и-течение)
 
 ## Запуск на i3/X11
 
 ```sh
-gallery=$(nix build github:Kostr2007/Wallpaper-MY/v0.2.0#gallery --no-link --print-out-paths)
-nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.4.0 -- \
+gallery=$(nix build github:Kostr2007/Wallpaper-MY/v0.3.0#gallery --no-link --print-out-paths)
+nix run github:Kostr2007/Wallpaper-Parallax-i3/v0.4.1 -- \
   --image "$gallery/aurora-fjord/aurora-fjord.png" --motion spring --travel 36
 ```
 
 ## Генерация своих вариантов
 
 ```sh
-nix run github:Kostr2007/Wallpaper-MY/v0.2.0 -- \
+nix run github:Kostr2007/Wallpaper-MY/v0.3.0 -- \
   --preset tidal-garden --seed 27 --accent '#7baacb' \
   --width 3840 --height 1440 --output ./wallpapers
 ```
 
 `--list` выводит имена сцен. Без `--preset` команда создаст всю коллекцию. Разрешение задаёт размер холста. Для прокрутки на мониторе 2560×1440 удобно взять холст шириной около 4000 пикселей. `--seed` меняет детали, а `--accent` смещает оттенки сцены. Одинаковые настройки и версия генератора дают одинаковый результат. Для повторной генерации укажите другой каталог.
 
-Команда сохраняет `tidal-garden/tidal-garden.png` и соседнюю папку `tidal-garden.parallax/`. PNG можно использовать как обычные обои. Папка содержит слои и `motion.json`, которые читает [Wallpaper-Parallax-i3](https://github.com/Kostr2007/Wallpaper-Parallax-i3/tree/v0.4.0#живые-сцены). Переносите PNG вместе с этой папкой.
+Команда сохраняет `tidal-garden/tidal-garden.png` и соседнюю папку `tidal-garden.parallax/`. PNG можно использовать как обычные обои. Папка содержит слои и `motion.json`, которые читает [Wallpaper-Parallax-i3](https://github.com/Kostr2007/Wallpaper-Parallax-i3/tree/v0.4.1#живые-сцены). Переносите PNG вместе с этой папкой.
 
 ## Свои анимации
 
 Сохраните рецепт пресета, поменяйте параметры и соберите GIF для просмотра.
 
 ```sh
-nix run github:Kostr2007/Wallpaper-MY/v0.2.0 -- \
+nix run github:Kostr2007/Wallpaper-MY/v0.3.0 -- \
   --write-recipe aurora-fjord > aurora.json
-nix run github:Kostr2007/Wallpaper-MY/v0.2.0 -- \
+nix run github:Kostr2007/Wallpaper-MY/v0.3.0 -- \
   --recipe aurora.json --width 1280 --height 480 --output ./work \
   --gif ./preview.gif
 ```
@@ -52,11 +54,11 @@ Flake использует два входа.
 
 ```nix
 wallpaper-my = {
-  url = "github:Kostr2007/Wallpaper-MY/v0.2.0";
+  url = "github:Kostr2007/Wallpaper-MY/v0.3.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 wallpaper-parallax = {
-  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.4.0";
+  url = "github:Kostr2007/Wallpaper-Parallax-i3/v0.4.1";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -87,4 +89,4 @@ in {
 
 ## Исследование и проверка
 
-[Заметки об Android, Material You и процедурных генераторах](docs/design.md). `nix flake check` проверяет команду генерации, повторяемость, портретный формат, ключевые кадры, GIF и композицию экспортированных слоёв. GIF записан с i3 на Xvfb командой `tools/record-demo.sh` из Wallpaper-Parallax-i3 с флагом `--live`.
+[Заметки об Android, Material You и процедурных генераторах](docs/design.md). `nix flake check` проверяет команду генерации, повторяемость, портретный формат, ключевые кадры, GIF и композицию экспортированных слоёв. Оба GIF записаны с i3 на Xvfb командой `tools/record-demo.sh` из Wallpaper-Parallax-i3 с флагом `--live`.
