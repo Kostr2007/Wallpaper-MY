@@ -60,6 +60,13 @@ with TemporaryDirectory() as directory:
         pack = check(root / "first" / scene, (320, 180))
         manifest = json.loads((pack / "motion.json").read_text())
         assert manifest["version"] == 2 and 2 <= manifest["period"] <= 120
+        if scene == "tidal-garden":
+            assert set(manifest["sway"]) == {"surface", "foreground"}
+            assert manifest["sway"]["surface"]["light"] == "atmosphere"
+            for plane in manifest["sway"]:
+                assert not (pack / f"{plane}.loop.png").exists()
+                with Image.open(pack / f"{plane}.png") as image:
+                    assert image.size == (320, 180)
         for name, track in manifest["tracks"].items():
             assert (pack / f"{name}.png").is_file()
             frames = atlas_frames(pack, name, track, manifest["frames"])
@@ -99,6 +106,7 @@ with TemporaryDirectory() as directory:
     fjord = json.loads(subprocess.check_output(["wallpaper-my", "--write-recipe", "aurora-fjord"]))
     fjord.update(duration=2, fps=6)
     fjord["tracks"]["surface"]["effects"][0]["strength"] = {"keys": [[0, 0], [.5, 1], [1, 0]]}
+    fjord["tracks"]["surface"]["effects"][-1]["strength"] = 0
     recipe_path.write_text(json.dumps(fjord))
     subprocess.run([*command, "--recipe", str(recipe_path), "--output", str(root / "fjord")], check=True)
     pack = check(root / "fjord" / "aurora-fjord", (320, 180))
@@ -117,7 +125,8 @@ with TemporaryDirectory() as directory:
 
     garden = json.loads(template)
     garden.update(duration=2, fps=6)
-    garden["tracks"]["surface"]["effects"][0]["strength"] = 0
+    garden["tracks"]["surface"].pop("sway")
+    garden["tracks"]["surface"]["effects"] = [{"type": "wave", "strength": 0}]
     recipe_path.write_text(json.dumps(garden))
     subprocess.run([*command, "--recipe", str(recipe_path), "--output", str(root / "lit")], check=True)
     pack = check(root / "lit" / "tidal-garden", (320, 180))
@@ -126,3 +135,13 @@ with TemporaryDirectory() as directory:
     frames = atlas_frames(pack, "surface", manifest["tracks"]["surface"], manifest["frames"])
     assert frames[0].getchannel("A").tobytes() == frames[6].getchannel("A").tobytes()
     assert ImageChops.difference(frames[0].convert("RGB"), frames[6].convert("RGB")).getbbox(), "light on still kelp"
+
+    fjord["tracks"]["surface"]["effects"] = [{"type": "moonlight", "strength": 1}]
+    recipe_path.write_text(json.dumps(fjord))
+    subprocess.run([*command, "--recipe", str(recipe_path), "--output", str(root / "moon")], check=True)
+    pack = check(root / "moon" / "aurora-fjord", (320, 180))
+    with Image.open(pack / "surface.png") as light:
+        alpha = light.getchannel("A")
+        assert alpha.crop((134, 53, 264, 90)).getextrema()[1] > 8, "moonbeams below the disk"
+        assert alpha.crop((198, 119, 255, 154)).getextrema()[1] > 8, "moon glints in the lake"
+        assert not alpha.crop((0, 0, 320, 41)).getbbox(), "no beams above the moon"

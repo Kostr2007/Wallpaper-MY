@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wallpaper-my"
-version = "0.3.0"
+version = "0.4.0"
 description = "Procedural live wallpapers inspired by Android and Material You"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26", "Pillow>=10"]

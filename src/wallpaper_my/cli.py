@@ -38,13 +38,15 @@ def render(name, timeline, output, size, seed, accent, animate, gif):
         staging = Path(temporary) / name
         companions = staging / f"{name}.parallax"
         companions.mkdir(parents=True)
-        tracks, frames = export_tracks(timeline, art, size, seed, accent, scene.accent, companions, animate, gif)
+        tracks, sway, frames = export_tracks(timeline, art, size, seed, accent, scene.accent, companions, animate, gif)
         for plane, image in layers.items():
             if plane == "background":
                 image = image.convert("RGB")
             image.save(companions / f"{plane}.png", compress_level=4)
-        if tracks:
+        if tracks or sway:
             manifest = {"version": 2, "period": timeline.duration, "frames": timeline.frames, "tracks": tracks}
+            if sway:
+                manifest["sway"] = sway
             (companions / "motion.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         compose(layers, size).save(staging / f"{name}.png", compress_level=4)
         if gif:

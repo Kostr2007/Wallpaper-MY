@@ -63,9 +63,36 @@ def reflect(c, layer, angle, power, scale, lake):
     from_above = np.pad(ridge, ((thickness, 0), (0, 0)))[:-thickness]
     slope = np.maximum(ridge - from_above, 0)
     radiance = emission.sum(axis=0, keepdims=True) / c.height
-    strength = (slope * power * 1.05)[..., None]
+    strength = (slope * power * .64)[..., None]
     tint = Image.frombytes("RGBa", c.size, u8(radiance * strength).tobytes())
     layer.alpha_composite(tint.convert("RGBA"))
+
+
+def moonlight(c, layer, angle, power, scale, lake, noise, color):
+    """Scatter light from the same moon that is painted on the middle plane."""
+    moon_u, moon_y = lake.moon
+    dx = (c.u - moon_u) * c.width / c.height
+    dy = c.y - moon_y
+    direction = np.arctan2(dx, dy)
+    radius = np.hypot(dx, dy)
+    sky = 1 - np.asarray(ImageChops.lighter(lake.water, lake.mountains), dtype=np.float32) / 255
+    mist = (.58 + .32 * bell(c.y - .46, .14) + .13 * noise) * np.exp(-radius * 1.43)
+    open_air = np.clip((radius - .045) / .092, 0, 1) * np.clip((dy - .005) / .10, 0, 1)
+    fan = np.zeros_like(radius)
+    for i, (axis, width, level) in enumerate(((-1.08, .060, .88), (-.82, .043, .84),
+                                               (-.56, .072, 1), (-.30, .044, .69), (.08, .080, .37))):
+        opening = axis + .019 * np.sin(angle + 1.4 * i)
+        fan += level * bell(direction - opening, scale * width * (1 + .34 * radius))
+    moon_color = color or "#d6e1fa"
+    c.wash(layer, moon_color, power * (.30 * fan + .029 * bell(direction + .60, .55)) * sky * mist * open_air)
+
+    distance = np.maximum(c.y - lake.horizon, 0)
+    water = np.asarray(lake.water, dtype=np.float32) / 255
+    pool = bell(dx + .025 * noise, .019 + .24 * distance) * bell(distance - .16, .18)
+    waves = np.sin(171 * distance - 2 * angle + 12 * dx + 2.6 * noise)
+    breaks = np.maximum(0, np.sin(50 * dx + 38 * distance + angle + noise * 2))
+    chips = np.maximum(waves, 0) ** 7 * (.18 + .82 * breaks)
+    c.wash(layer, moon_color, power * water * pool * (.062 + .22 * chips))
 
 
 def ripples(c, layer, angle, power, scale, color, secondary, noise, _particles):
@@ -141,17 +168,32 @@ def motes(c, layer, angle, power, scale, color, secondary, _noise, particles):
 
 
 def wave(c, layer, angle, power, scale, _color, _secondary, noise, _particles):
-    # Fix the bottom in place and interpolate in premultiplied alpha to avoid dark fringes.
-    row = np.arange(c.height)[:, None]
-    x = np.arange(c.width, dtype=np.float32)[None, :]
     sway = .065 * c.width * power * np.maximum(.86 - c.y, 0) ** 1.45
     shift = sway * np.sin(current_phase(c.x, c.y, angle, scale) + .47 * noise)
-    sample = np.clip(x - shift, 0, c.width - 1)
+    layer.paste(shift_rows(layer, shift))
+
+
+def shift_rows(layer, shift):
+    # Resample premultiplied colors so semi-transparent edges retain their hue.
+    width, height = layer.size
+    row = np.arange(height)[:, None]
+    x = np.arange(width, dtype=np.float32)[None, :]
+    sample = np.clip(x - shift, 0, width - 1)
     left = sample.astype(np.int32)
     weight = (sample - left)[..., None]
     pixels = np.asarray(layer.convert("RGBa"))
-    data = np.rint(pixels[row, left] * (1 - weight) + pixels[row, np.minimum(left + 1, c.width - 1)] * weight)
-    layer.paste(Image.frombytes("RGBa", c.size, data.astype(np.uint8).tobytes()).convert("RGBA"))
+    data = pixels[row, left] * (1 - weight) + pixels[row, np.minimum(left + 1, width - 1)] * weight
+    return Image.frombytes("RGBa", layer.size, u8(data).tobytes()).convert("RGBA")
+
+
+def sway_preview(layer, sway, time):
+    amplitude, root, phase = sway
+    height = layer.height
+    y = (np.arange(height, dtype=np.float32)[:, None] + .5) / height
+    angle = 3.1 * y + phase * tau
+    envelope = np.maximum((root - y) / root, 0) ** 1.6
+    displacement = amplitude * height * envelope * (np.sin(angle + time * tau) - np.sin(angle)) / 2
+    return shift_rows(layer, displacement)
 
 
 def bloom(c, layer, _angle, power, scale, _color, _secondary, _noise, _particles):
@@ -179,7 +221,7 @@ class EffectPainter:
         if lake is not None:
             water, mountains = (mask.resize(canvas.size, Image.Resampling.LANCZOS)
                                 for mask in (lake.water, lake.mountains))
-            lake = Lake(lake.horizon, water, mountains)
+            lake = Lake(lake.horizon, water, mountains, lake.moon)
         self.lake = lake
         self.noise = canvas.noise(36, 14)
         count = min(120, max(24, round(34 * canvas.width / canvas.height)))
@@ -196,10 +238,13 @@ class EffectPainter:
                 if effect.name not in ("particles", "wave"):
                     angle += index * pi * .48
                 scale = effect.scale.at(time)
-                if effect.name == "reflection":
+                if effect.name in ("reflection", "moonlight"):
                     if self.lake is None:
-                        raise ValueError("reflection requires a scene with a lake")
-                    reflect(self.canvas, layer, angle, power, scale, self.lake)
+                        raise ValueError(f"{effect.name} requires a scene with a lake")
+                    if effect.name == "reflection":
+                        reflect(self.canvas, layer, angle, power, scale, self.lake)
+                    else:
+                        moonlight(self.canvas, layer, angle, power, scale, self.lake, self.noise, effect.color)
                 else:
                     PAINTERS[effect.name](self.canvas, layer, angle, power, scale,
                                           effect.color, effect.secondary, self.noise, self.particles)

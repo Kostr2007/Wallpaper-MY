@@ -6,7 +6,7 @@ from math import floor
 import re
 
 PLANES = ("background", "atmosphere", "middle", "surface", "foreground", "particles")
-EFFECTS = ("aurora", "haze", "caustics", "ripples", "particles", "wave", "bloom", "reflection")
+EFFECTS = ("aurora", "haze", "caustics", "ripples", "particles", "wave", "bloom", "reflection", "moonlight")
 
 
 def in_range(value, low, high):
@@ -97,6 +97,7 @@ class Track:
     effects: tuple[Effect, ...]
     parallax: str
     light: str | None
+    sway: tuple[float, float, float] | None
 
 
 @dataclass(frozen=True)
@@ -124,10 +125,21 @@ class Timeline:
         for name, track in tracks.items():
             if name not in PLANES[1:]:
                 raise ValueError(f"unknown overlay {name!r}")
-            fields(track, ("base", "effects", "parallax", "light"), f"{name} track")
-            base, effects = track.get("base", False), track.get("effects")
-            if type(base) is not bool or not isinstance(effects, list) or not 1 <= len(effects) <= 8:
-                raise ValueError(f"{name} must have a boolean base and one to eight effects")
+            fields(track, ("base", "effects", "parallax", "light", "sway"), f"{name} track")
+            base, effects = track.get("base", False), track.get("effects", [])
+            sway = track.get("sway")
+            if type(base) is not bool or not isinstance(effects, list):
+                raise ValueError(f"{name} must have a boolean base and a list of effects")
+            if sway is None and not 1 <= len(effects) <= 8:
+                raise ValueError(f"{name} needs one to eight effects or a sway track")
+            if sway is not None:
+                fields(sway, ("amplitude", "root", "phase"), f"{name} sway")
+                if effects or not base:
+                    raise ValueError(f"{name} sway needs its native base image")
+                amplitude, root, phase = sway.get("amplitude"), sway.get("root", .98), sway.get("phase", 0)
+                if not (in_range(amplitude, .001, .15) and in_range(root, .60, 1) and in_range(phase, 0, 1)):
+                    raise ValueError(f"invalid sway geometry for {name}")
+                sway = amplitude, root, phase
             parallax = track.get("parallax", name)
             if parallax not in PLANES:
                 raise ValueError(f"{name} has an unknown parallax anchor")
@@ -136,13 +148,15 @@ class Timeline:
                                       or light not in tracks):
                 raise ValueError(f"{name} light must name an earlier animated plane")
             effects = tuple(Effect.read(effect) for effect in effects)
-            if any(effect.name == "reflection" for effect in effects):
+            if any(effect.name in ("reflection", "moonlight") for effect in effects):
                 if preset != "aurora-fjord" or name != "surface" or parallax not in ("middle", "surface"):
-                    raise ValueError("reflection needs Aurora Fjord's surface track aligned with the lake")
-            parsed[name] = Track(base, effects, parallax, light)
+                    raise ValueError("lake lighting needs Aurora Fjord's surface track aligned with the lake")
+            parsed[name] = Track(base, effects, parallax, light, sway)
         for name, track in parsed.items():
-            if track.light is not None and parsed[track.light].parallax != track.parallax:
-                raise ValueError(f"{name} and {track.light} need the same parallax anchor")
+            if track.light is not None:
+                source = parsed[track.light]
+                if source.sway is not None or source.parallax != track.parallax:
+                    raise ValueError(f"{name} light needs an effects track with the same parallax anchor")
         return preset, cls(duration, frames, parsed)
 
 
@@ -158,6 +172,7 @@ RECIPES = {
                 {"type": "aurora", "strength": pulse(.79, .96, .48)},
                 {"type": "bloom", "strength": .23, "scale": .85},
                 {"type": "reflection", "strength": .77, "scale": .86},
+                {"type": "moonlight", "strength": pulse(.66, .89, .55), "scale": .92},
             ]},
         },
     },
@@ -176,9 +191,8 @@ RECIPES = {
                 {"type": "caustics", "strength": pulse(.63, .80, .48)},
                 {"type": "particles", "strength": .56, "scale": .92},
             ]},
-            "surface": {"base": True, "light": "atmosphere", "effects": [
-                {"type": "wave", "strength": .94, "scale": .92},
-            ]},
+            "surface": {"base": True, "light": "atmosphere", "sway": {"amplitude": .114, "root": .98}},
+            "foreground": {"base": True, "sway": {"amplitude": .082, "root": .996, "phase": .067}},
         },
     },
 }

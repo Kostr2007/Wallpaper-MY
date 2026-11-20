@@ -7,7 +7,7 @@ import tempfile
 
 from PIL import Image
 
-from .effects import EffectPainter, receive_light
+from .effects import EffectPainter, receive_light, sway_preview
 from .paint import Canvas
 from .timeline import PLANES
 
@@ -42,20 +42,26 @@ def export_tracks(timeline, art, size, seed, accent, anchor, directory, animate,
         raise ValueError("effect frame geometry exceeds the filmstrip dimensions")
     painter = EffectPainter(Canvas(*frame_size, seed ^ 0xA7F0, accent, anchor), art.lake)
     ordered = [(name, timeline.tracks[name]) for name in PLANES if name in timeline.tracks]
+    baked = [(name, track) for name, track in ordered if track.sway is None]
+    native = [(name, track) for name, track in ordered if track.sway is not None]
+    for name, _ in native:
+        if name not in layers:
+            raise ValueError(f"base layer {name!r} is missing for sway")
     bases = {name: layers[name].resize(frame_size, Image.Resampling.LANCZOS)
-             for name, track in timeline.tracks.items() if track.base and name in layers}
-    atlases = {name: Image.new("RGBA", atlas_size) for name in timeline.tracks} if animate else {}
+             for name, track in baked if track.base and name in layers}
+    atlases = {name: Image.new("RGBA", atlas_size) for name, _ in baked} if animate else {}
     preview_frames = []
     if gif:
         gif_ratio = min(1, 640 / max(size))
         gif_size = tuple(max(1, round(value * gif_ratio)) for value in size)
-        gif_layers = {name: layer.resize(gif_size, Image.Resampling.LANCZOS) for name, layer in layers.items()
-                      if name not in timeline.tracks}
+        gif_layers = {name: layer.resize(gif_size, Image.Resampling.LANCZOS) for name, layer in layers.items()}
+        native_bases = {name: gif_layers[name] for name, _ in native}
 
     for index in range(timeline.frames if animate or gif else 1):
         lit_frames = {}
-        for name, track in ordered:
-            frame = painter.frame(track.effects, bases.get(name), index / timeline.frames)
+        time = index / timeline.frames
+        for name, track in baked:
+            frame = painter.frame(track.effects, bases.get(name), time)
             if track.light is not None:
                 frame = receive_light(frame, lit_frames[track.light])
             lit_frames[name] = frame
@@ -67,16 +73,28 @@ def export_tracks(timeline, art, size, seed, accent, anchor, directory, animate,
             if gif:
                 gif_layers[name] = frame.resize(gif_size, Image.Resampling.BICUBIC)
         if gif:
+            for name, track in native:
+                frame = sway_preview(native_bases[name], track.sway, time)
+                if track.light is not None:
+                    frame = receive_light(frame, gif_layers[track.light])
+                gif_layers[name] = frame
             preview_frames.append(compose(gif_layers, gif_size))
 
     for name, atlas in atlases.items():
         # The transparent frames retain full alpha precision throughout playback.
         atlas.save(directory / f"{name}.loop.png", compress_level=3)
     tracks = {name: {"width": fw, "height": fh, "columns": columns} for name in atlases}
-    for name, track in ordered:
+    for name, track in baked:
         if name in tracks and track.parallax != name:
             tracks[name]["parallax"] = track.parallax
-    return tracks, preview_frames
+    sway = {}
+    if animate:
+        for name, track in native:
+            amplitude, root, phase = track.sway
+            sway[name] = {"amplitude": amplitude, "root": root, "phase": phase, "parallax": track.parallax}
+            if track.light is not None:
+                sway[name]["light"] = track.light
+    return tracks, sway, preview_frames
 
 
 def save_gif(frames, period, path):

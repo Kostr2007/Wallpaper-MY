@@ -14,6 +14,7 @@ class Lake:
     horizon: float
     water: Image.Image
     mountains: Image.Image
+    moon: tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -29,10 +30,12 @@ def aurora(c):
     glow = bell(x + .23, .75) * bell(y - .49, .36)
     sky = c.tones(y * .74 + .27 * glow + .014 * c.grain(),
                   (0, "#0c102e"), (.28, "#222353"), (.55, "#354777"), (1, "#648b9e"))
-    moon_x, moon_y = x[0, int(w * .74)], .27
+    moon_u, moon_y = .685, .244
+    moon_x = (moon_u - .5) * w / h
     radius = np.hypot(x - moon_x, y - moon_y)
-    c.wash(sky, "#c1c4f3", .14 * bell(radius, .12))
-    c.wash(sky, "#efddef", np.clip((.059 - radius) * h, 0, 1) * (.87 + .10 * mist))
+    moon = c.transparent()
+    c.wash(moon, "#a3b6e5", .21 * bell(radius, .115))
+    c.wash(moon, "#ebebfa", np.clip((.048 - radius) * h, 0, 1) * (.90 + .08 * mist))
     stars = c.transparent()
     dots = ImageDraw.Draw(stars)
     for _ in range(round(240 * w / h)):
@@ -51,24 +54,26 @@ def aurora(c):
     mountains = c.transparent()
     contour = c.noise(29, 23)
     rock_detail = c.noise(130, 87)
+    relief = .72 * contour + .28 * rock_detail
+    grad_y, grad_x = np.gradient(relief)
+    rock_light = np.tanh(grad_x * w / 56 - grad_y * h / 64)
     for index, (base, lift, dark, bright) in enumerate([
         (.535, .028, "#323c65", "#889db0"), (.574, .060, "#202646", "#637196"),
         (.625, .133, "#151a37", "#4f5b80"),
     ]):
         edge = base - lift * (1.1 - bell(x + .03, .55)) + c.ridge(15 - index * 3, .058 + .019 * index)
         below = y - edge
-        strata = np.sin(x * (88 + index * 21) + y * (64 - index * 13) + 5 * contour)
-        cracks = np.abs(strata) ** 3 * (.095 + .085 * rock_detail)
-        facet = np.tanh(np.gradient(edge[0]) * w * .13)
-        value = .25 + (.39 + .17 * facet) * bell(below, .055) + .21 * contour
-        value += .13 * rock_detail - cracks + c.grain() * .014
+        facet = np.tanh(np.gradient(edge[0]) * w * .12)
+        value = .30 + (.42 + .14 * facet) * bell(below, .066) + .18 * contour
+        value += .11 * rock_light + .045 * rock_detail + c.grain() * .014
         fade = np.clip((.61 + .012 * index - y) * 100, 0, 1)
         mountain = c.tones(value, (0, dark), (.98, bright),
                            alpha=np.clip(below * h, 0, 1) * fade)
         mountains.alpha_composite(mountain)
     mountain_alpha = mountains.getchannel("A")
     water = ImageChops.multiply(lake.getchannel("A"), ImageChops.invert(mountain_alpha))
-    lake.alpha_composite(mountains)
+    moon.alpha_composite(lake)
+    moon.alpha_composite(mountains)
 
     shore = .975 - .14 * bell(x + .98, .49) - .25 * bell(x - .95, .53) + c.ridge(17, .027)
     land = c.tones(.43 + .17 * mist + .12 * contour - .29 * y + .013 * c.grain(),
@@ -89,8 +94,8 @@ def aurora(c):
             trees.polygon([(pos, py - length * .10), (pos - span, py + length * .065),
                            (pos - span * .27, py + length * .044), (pos, py + length * .094),
                            (pos + span * .9, py + length * .085)], fill=(*c.color(color), 255))
-    return SceneArt({"background": sky, "middle": lake, "foreground": land},
-                    Lake(horizon, water, mountain_alpha))
+    return SceneArt({"background": sky, "middle": moon, "foreground": land},
+                    Lake(horizon, water, mountain_alpha, (moon_u, moon_y)))
 
 
 def dunes(c):
@@ -136,7 +141,6 @@ def dunes(c):
 
 def garden(c):
     x, y = c.x, c.y
-    w, h = c.size
     swell = c.noise(15, 14)
     fine = c.noise(52, 34)
     glow = bell(x + .15, .56) * bell(y - .08, .51)
@@ -149,10 +153,17 @@ def garden(c):
         line = level + c.ridge(7 + index * 3, .096) - .115 * bell(x - .93, .57)
         delta = y - line
         rock = .35 + .27 * swell + .18 * fine + .23 * bell(delta, .11) + .023 * c.grain()
-        reef.alpha_composite(c.tones(rock, (0, dark), (1, bright), alpha=np.clip(delta * h, 0, 1)))
+        reef.alpha_composite(c.tones(rock, (0, dark), (1, bright), alpha=np.clip(delta * c.height, 0, 1)))
 
-    plants = c.transparent()
+    # Supersample the silhouettes and veins before uploading the native PNGs.
+    supersample = 2
+    w, h = (dimension * supersample for dimension in c.size)
+    plants = Image.new("RGBA", (w, h))
     draw = ImageDraw.Draw(plants)
+
+    def stroke(points, color, opacity=255, weight=1):
+        c.stroke(draw, points, color, opacity, weight * supersample)
+
     for index, position in enumerate(np.linspace(.01, .99, max(15, round(w / h * 14)))):
         px = position * w
         outer = np.clip(2.8 * abs(position - .5), .13, 1)
@@ -178,18 +189,23 @@ def garden(c):
                 side = -1 if (i + index) % 2 else 1
                 span = length * taper * (.15 + .045 * sin(i + bend))
                 dx, dy = side * span, -span * (.63 + .35 * i / 64)
-                tips = [(pos_x, pos_y), (pos_x + dx * .40, pos_y + dy * .62),
-                        (pos_x + dx * .79, pos_y + dy * .89), (pos_x + dx, pos_y + dy),
-                        (pos_x + dx * .64, pos_y + dy * .36), (pos_x + dx * .29, pos_y + dy * .21)]
-                draw.polygon(tips, fill=(*c.color(color), 255))
-                c.stroke(draw, [tips[0], (pos_x + .53 * dx, pos_y + .52 * dy), tips[3]],
-                         "#527e86", opacity=182)
+                blade, lower_edge, upper_edge = [], [], []
+                for t in np.linspace(0, 1, 11):
+                    arch = sin(pi * t)
+                    bx, by = pos_x + dx * t, pos_y + dy * t - span * .10 * arch
+                    breadth = .155 * arch * (1.15 - .3 * t)
+                    blade.append((bx, by))
+                    lower_edge.append((bx - dy * breadth, by + dx * breadth))
+                    upper_edge.append((bx + dy * breadth, by - dx * breadth))
+                draw.polygon(lower_edge + upper_edge[::-1], fill=(*c.color(color), 255))
+                stroke(blade, "#527e86", opacity=182)
         draw.polygon(left + right[::-1], fill=(*c.color(color), 255))
-        c.stroke(draw, spine[2:-5], "#668e96", opacity=171)
+        stroke(spine[2:-5], "#668e96", opacity=171)
         for i in range(7, 58, 4):
-            c.stroke(draw, [left[i], spine[i - 4], right[i]], "#58718e", opacity=120)
+            stroke([left[i], spine[i - 4], right[i]], "#58718e", opacity=120)
 
-    corals = c.transparent()
+    plants = plants.resize(c.size, Image.Resampling.LANCZOS)
+    corals = Image.new("RGBA", (w, h))
     draw = ImageDraw.Draw(corals)
     for center, base in [(.15, .97), (.28, 1.03), (.71, 1.04), (.86, .98), (.96, .94)]:
         px, py = center * w, base * h
@@ -198,15 +214,15 @@ def garden(c):
             length = h * c.rng.uniform(.08, .22)
             branch = [(px + sin(direction) * length * t**1.25,
                        py - cos(direction) * length * t) for t in np.linspace(0, 1, 13)]
-            c.stroke(draw, branch, "#674a7b", weight=2.5)
+            stroke(branch, "#674a7b", weight=2.5)
             for bx, by in branch[3:]:
                 span = length * c.rng.uniform(.10, .23)
                 for sign in (-1, 1):
                     tip = bx + span * sign, by - span * .76
-                    c.stroke(draw, [(bx, by), (bx + span * sign * .63, by - span * .40), tip],
-                             "#9b79a9", opacity=235)
-                    r = max(.6, .0013 * h)
+                    stroke([(bx, by), (bx + span * sign * .63, by - span * .40), tip], "#9b79a9", opacity=235)
+                    r = max(.6 * supersample, .0013 * h)
                     draw.ellipse((tip[0] - r, tip[1] - r, tip[0] + r, tip[1] + r),
                                  fill=(*c.color("#e4accd"), 230))
 
+    corals = corals.resize(c.size, Image.Resampling.LANCZOS)
     return SceneArt({"background": sea, "middle": reef, "surface": plants, "foreground": corals})
