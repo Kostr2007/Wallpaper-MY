@@ -49,7 +49,7 @@
                 ];
               }
               ''
-                python ${./tests/generator.py}
+                python ${./tests/generator.py} ${./src}
                 touch "$out"
               '';
         }
